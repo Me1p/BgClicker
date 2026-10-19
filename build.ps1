@@ -14,10 +14,28 @@ $cscCandidates = @(
     'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe'
 )
 $csc = $cscCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
 if (-not $csc) {
-    $csc = (Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\2022\*\MSBuild\Current\Bin\Roslyn\csc.exe' -ErrorAction SilentlyContinue |
-            Select-Object -First 1).FullName
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        $found = & $vswhere -latest -products * -find 'MSBuild\**\Bin\Roslyn\csc.exe' 2>$null |
+            Select-Object -First 1
+        if ($found -and (Test-Path $found)) { $csc = $found }
+    }
 }
+
+if (-not $csc) {
+    $patterns = @(
+        'C:\Program Files\Microsoft Visual Studio\2022\*\MSBuild\Current\Bin\Roslyn\csc.exe',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2022\*\MSBuild\Current\Bin\Roslyn\csc.exe',
+        'C:\Program Files\Microsoft Visual Studio\2019\*\MSBuild\Current\Bin\Roslyn\csc.exe'
+    )
+    foreach ($pattern in $patterns) {
+        $found = Get-ChildItem $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { $csc = $found.FullName; break }
+    }
+}
+
 if (-not $csc) { throw 'Roslyn csc.exe not found (Visual Studio Build Tools are required).' }
 
 $framework = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319'
