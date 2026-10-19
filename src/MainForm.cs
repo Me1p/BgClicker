@@ -82,6 +82,7 @@ namespace BgClicker
         public MainForm()
         {
             _cfg = AppSettings.Load();
+            RemoveLegacyLog();
             _palette = ThemeManager.Palette(false);
             _restrictedEnvironment = BrowserLauncher.IsRestrictedEnvironment(out _environmentError);
             Log("startup: lowIntegrity=" + Native.IsLowIntegrity() +
@@ -1811,12 +1812,59 @@ namespace BgClicker
             return value;
         }
 
-        private static void Log(string message)
+        private static string GetLogPath()
         {
             try
             {
+                string dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "BgClicker",
+                    "logs");
+                Directory.CreateDirectory(dir);
+                return Path.Combine(dir, "launch.log");
+            }
+            catch
+            {
+                try
+                {
+                    string dir = Path.Combine(Path.GetTempPath(), "BgClicker", "logs");
+                    Directory.CreateDirectory(dir);
+                    return Path.Combine(dir, "launch.log");
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
+        private static void RemoveLegacyLog()
+        {
+            try
+            {
+                string legacy = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launch.log");
+                if (File.Exists(legacy))
+                {
+                    File.Delete(legacy);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void Log(string message)
+        {
+            string path = GetLogPath();
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            try
+            {
                 File.AppendAllText(
-                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launch.log"),
+                    path,
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + message + Environment.NewLine);
             }
             catch
