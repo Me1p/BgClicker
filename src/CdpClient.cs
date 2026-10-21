@@ -144,6 +144,40 @@ new Promise(function (resolve) {
             return result;
         }
 
+        public static async Task<CdpTarget> CreateTabAsync(int port, string url)
+        {
+            using (var handler = new HttpClientHandler { UseProxy = false })
+            using (var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) })
+            {
+                string endpoint = "http://127.0.0.1:" + port + "/json/new?" + Uri.EscapeDataString(url);
+                using (HttpResponseMessage response = await http.PutAsync(endpoint, null).ConfigureAwait(false))
+                {
+                    response.EnsureSuccessStatusCode();
+                    string json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    var map = Serializer.DeserializeObject(json) as Dictionary<string, object>;
+                    if (map == null)
+                    {
+                        throw new InvalidOperationException("Chrome не вернул данные новой вкладки");
+                    }
+
+                    string ws = Str(map, "webSocketDebuggerUrl");
+                    if (string.IsNullOrEmpty(ws))
+                    {
+                        throw new InvalidOperationException("Chrome не вернул адрес отладки новой вкладки");
+                    }
+
+                    return new CdpTarget
+                    {
+                        Id = Str(map, "id"),
+                        Title = Str(map, "title"),
+                        Url = Str(map, "url"),
+                        WsUrl = ws,
+                        Type = "page"
+                    };
+                }
+            }
+        }
+
         public async Task ConnectAsync(CdpTarget target)
         {
             if (target == null || string.IsNullOrEmpty(target.WsUrl))

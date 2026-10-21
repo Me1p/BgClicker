@@ -49,6 +49,7 @@ namespace BgClicker
         private Button _btnPickBrowser;
         private Button _btnTestBrowser;
         private Button _btnAddBrowserTarget;
+        private Button _btnNewTab;
         private NumericUpDown _numX;
         private NumericUpDown _numY;
         private Label _lblPointBrowser;
@@ -63,6 +64,7 @@ namespace BgClicker
         private NumericUpDown _numReload;
         private ListBox _lstTargets;
         private Label _lblTargetsCount;
+        private Button _btnTargetPick;
         private readonly List<ClickTarget> _targets = new List<ClickTarget>();
 
         private NumericUpDown _numCps;
@@ -550,15 +552,25 @@ namespace BgClicker
             };
             _btnAddBrowserTarget = new Button
             {
-                Text = "Добавить вкладку в цели",
+                Text = "Добавить эту вкладку",
                 AutoSize = true,
                 Margin = new Padding(0)
             };
             _btnAddBrowserTarget.Click += OnAddBrowserTargetClick;
             addFlow.Controls.Add(_btnAddBrowserTarget);
+
+            _btnNewTab = new Button
+            {
+                Text = "Открыть вторую вкладку",
+                AutoSize = true,
+                Margin = new Padding(8, 0, 0, 0)
+            };
+            _btnNewTab.Click += OnNewTabClick;
+            addFlow.Controls.Add(_btnNewTab);
+
             addFlow.Controls.Add(new Label
             {
-                Text = "Цель = вкладка + текущая точка.",
+                Text = "Новая вкладка откроется с той же страницей.",
                 AutoSize = true,
                 ForeColor = Color.DimGray,
                 Tag = "hint",
@@ -844,8 +856,8 @@ namespace BgClicker
 
             page.Controls.Add(new Label
             {
-                Text = "Кликер будет кликать по всем целям за один цикл. " +
-                       "Добавляйте вкладки на вкладке «Браузер», окна — на вкладке «Любое окно».",
+                Text = "Кликер будет кликать по всем целям за один цикл. Выберите цель в списке " +
+                       "и нажмите «Указать точку», чтобы задать ей свою точку.",
                 AutoSize = true,
                 MaximumSize = new Size(720, 0),
                 ForeColor = Color.DimGray,
@@ -869,6 +881,15 @@ namespace BgClicker
                 WrapContents = false,
                 Margin = new Padding(0)
             };
+            _btnTargetPick = new Button
+            {
+                Text = "Указать точку",
+                AutoSize = true,
+                Margin = new Padding(0, 0, 6, 0)
+            };
+            _btnTargetPick.Click += OnPickTargetClick;
+            buttons.Controls.Add(_btnTargetPick);
+
             var remove = new Button
             {
                 Text = "Удалить выбранную",
@@ -1267,25 +1288,21 @@ namespace BgClicker
                 return;
             }
 
+            SetStatus("Обновляю список вкладок...", false);
+            await RefreshTargetsAsync(false);
             SetStatus("Подключаюсь к целям...", false);
 
+            var used = new HashSet<string>();
             foreach (ClickTarget target in snapshot)
             {
                 if (target.Config.Browser)
                 {
-                    try
+                    if (!await EnsureTargetConnectedAsync(target, used))
                     {
-                        var info = new CdpTarget
-                        {
-                            WsUrl = target.Config.WsUrl,
-                            Url = target.Config.Url,
-                            Title = target.Config.Title
-                        };
-                        target.Connection = await GetConnectionAsync(info);
-                    }
-                    catch (Exception ex)
-                    {
-                        SetStatus("Не удалось подключиться к «" + target + "»: " + ex.Message, true);
+                        SetStatus(
+                            "Вкладка «" + target + "» не найдена. Нажмите «Подключить / обновить список» " +
+                            "или добавьте вкладку заново.",
+                            true);
                         return;
                     }
                 }
@@ -1404,6 +1421,14 @@ namespace BgClicker
 
             double x = (double)_numX.Value;
             double y = (double)_numY.Value;
+            AddOrUpdateBrowserTarget(tab, x, y);
+            RefreshTargetList();
+            SaveSettings();
+            SetStatus("Цель добавлена: " + tab.Title, false);
+        }
+
+        private void AddOrUpdateBrowserTarget(CdpTarget tab, double x, double y)
+        {
             ClickTarget existing = _targets.Find(delegate(ClickTarget target)
             {
                 return target.Config.Browser && target.Config.WsUrl == tab.WsUrl;
@@ -1431,10 +1456,241 @@ namespace BgClicker
                     }
                 });
             }
+        }
 
-            RefreshTargetList();
-            SaveSettings();
-            SetStatus("Цель добавлена: " + tab.Title, false);
+        private async void OnNewTabClick(object sender, EventArgs e)
+        {
+            string url = GetPageUrlForNewTab();
+            if (string.IsNullOrEmpty(url))
+            {
+                SetStatus("Сначала откройте нужный сайт в браузере", true);
+                return;
+            }
+
+            _btnNewTab.Enabled = false;
+            try
+            {
+                double x = (double)_numX.Value;
+                double y = (double)_numY.Value;
+
+                var selected = _cmbTabs.SelectedItem as CdpTarget;
+                if (selected != null && IsWebUrl(selected.Url))
+                {
+                    AddOrUpdateBrowserTarget(selected, x, y);
+                }
+
+                CdpTarget created = await CdpConnection.CreateTabAsync(BrowserLauncher.DebugPort, url);
+                string title = string.IsNullOrEmpty(created.Title) ? "Новая вкладка" : created.Title;
+                var config = new ClickTargetSettings
+                {
+                    Browser = true,
+                    Title = title,
+                    Url = created.Url,
+                    WsUrl = created.WsUrl,
+                    X = x,
+                    Y = y
+                };
+                _targets.Add(new ClickTarget { Config = config });
+                RefreshTargetList();
+                await RefreshTargetsAsync(false);
+                SelectComboTarget(created.WsUrl);
+                RefreshTargetList();
+                SaveSettings();
+                SetStatus("Открыта вторая вкладка: " + title, false);
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Не удалось открыть вторую вкладку: " + ex.Message, true);
+            }
+            finally
+            {
+                _btnNewTab.Enabled = true;
+            }
+        }
+
+        private string GetPageUrlForNewTab()
+        {
+            var selected = _cmbTabs.SelectedItem as CdpTarget;
+            if (selected != null && IsWebUrl(selected.Url))
+            {
+                return selected.Url;
+            }
+
+            foreach (ClickTarget target in _targets)
+            {
+                if (target.Config.Browser && IsWebUrl(target.Config.Url))
+                {
+                    return target.Config.Url;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsWebUrl(string url)
+        {
+            return !string.IsNullOrEmpty(url) &&
+                   (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                    url.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void SelectComboTarget(string wsUrl)
+        {
+            for (int i = 0; i < _cmbTabs.Items.Count; i++)
+            {
+                var item = _cmbTabs.Items[i] as CdpTarget;
+                if (item != null && item.WsUrl == wsUrl)
+                {
+                    _cmbTabs.SelectedIndex = i;
+                    return;
+                }
+            }
+        }
+
+        private async void OnPickTargetClick(object sender, EventArgs e)
+        {
+            var target = _lstTargets.SelectedItem as ClickTarget;
+            if (target == null)
+            {
+                SetStatus("Выберите цель в списке", true);
+                return;
+            }
+
+            if (!target.Config.Browser)
+            {
+                SetStatus("Для окна точка задаётся при добавлении цели", true);
+                return;
+            }
+
+            _btnTargetPick.Enabled = false;
+            Hide();
+            try
+            {
+                if (!await EnsureTargetConnectedAsync(target))
+                {
+                    SetStatus("Вкладка «" + target + "» не найдена. Обновите список вкладок.", true);
+                    return;
+                }
+
+                await BringPageToFrontAsync(target.Connection);
+                object value = await target.Connection.EvaluateAsync(CdpScripts.PickPoint, true, 180000);
+                var point = value as Dictionary<string, object>;
+                if (point == null || !point.ContainsKey("x") || !point.ContainsKey("y"))
+                {
+                    SetStatus("Точка не выбрана", true);
+                    return;
+                }
+
+                target.Config.X = Convert.ToDouble(point["x"]);
+                target.Config.Y = Convert.ToDouble(point["y"]);
+                RefreshTargetList();
+                SaveSettings();
+                SetStatus("Точка цели: " + (int)target.Config.X + ", " + (int)target.Config.Y, false);
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Не удалось указать точку: " + ex.Message, true);
+            }
+            finally
+            {
+                _btnTargetPick.Enabled = true;
+                Show();
+                WindowState = FormWindowState.Normal;
+                Activate();
+            }
+        }
+
+        private async Task<bool> EnsureTargetConnectedAsync(ClickTarget target, HashSet<string> used = null)
+        {
+            if (target.Connection != null && target.Connection.IsConnected &&
+                (used == null || !used.Contains(target.Config.WsUrl)))
+            {
+                if (used != null)
+                {
+                    used.Add(target.Config.WsUrl);
+                }
+
+                return true;
+            }
+
+            List<CdpTarget> targets;
+            try
+            {
+                targets = await CdpConnection.ListTargetsAsync(BrowserLauncher.DebugPort);
+            }
+            catch
+            {
+                return false;
+            }
+
+            CdpTarget match = FindTarget(targets, target.Config, used);
+            if (match == null)
+            {
+                return false;
+            }
+
+            target.Config.WsUrl = match.WsUrl;
+            target.Config.Url = match.Url;
+            if (!string.IsNullOrEmpty(match.Title))
+            {
+                target.Config.Title = match.Title;
+            }
+
+            if (target.Connection != null)
+            {
+                target.Connection.Dispose();
+            }
+
+            try
+            {
+                target.Connection = await GetConnectionAsync(match);
+                if (used != null)
+                {
+                    used.Add(match.WsUrl);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static CdpTarget FindTarget(
+            List<CdpTarget> targets,
+            ClickTargetSettings config,
+            HashSet<string> used = null)
+        {
+            CdpTarget exact = targets.Find(delegate(CdpTarget item)
+            {
+                return item.WsUrl == config.WsUrl &&
+                       (used == null || !used.Contains(item.WsUrl));
+            });
+            if (exact != null)
+            {
+                return exact;
+            }
+
+            string url = NormalizeUrl(config.Url);
+            List<CdpTarget> matches = targets.FindAll(delegate(CdpTarget item)
+            {
+                return NormalizeUrl(item.Url) == url &&
+                       (used == null || !used.Contains(item.WsUrl));
+            });
+
+            if (used != null)
+            {
+                return matches.Count > 0 ? matches[0] : null;
+            }
+
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
+        private static string NormalizeUrl(string url)
+        {
+            return (url ?? "").TrimEnd('/');
         }
 
         private void OnAddWindowTargetClick(object sender, EventArgs e)
@@ -1727,26 +1983,15 @@ namespace BgClicker
                         continue;
                     }
 
-                    bool stillOpen = targets.Exists(delegate(CdpTarget item)
+                    CdpTarget match = FindTarget(targets, clickTarget.Config);
+                    if (match != null)
                     {
-                        return item.WsUrl == clickTarget.Config.WsUrl;
-                    });
-                    if (stillOpen)
-                    {
-                        continue;
-                    }
-
-                    // The tab was reopened: update the endpoint only when the URL
-                    // uniquely identifies it. Several identical tabs must keep
-                    // their own WsUrl, otherwise they would collapse into one.
-                    List<CdpTarget> matches = targets.FindAll(delegate(CdpTarget item)
-                    {
-                        return item.Url == clickTarget.Config.Url;
-                    });
-                    if (matches.Count == 1)
-                    {
-                        clickTarget.Config.WsUrl = matches[0].WsUrl;
-                        clickTarget.Config.Title = matches[0].Title;
+                        clickTarget.Config.WsUrl = match.WsUrl;
+                        clickTarget.Config.Url = match.Url;
+                        if (!string.IsNullOrEmpty(match.Title))
+                        {
+                            clickTarget.Config.Title = match.Title;
+                        }
                     }
                 }
 
@@ -1925,11 +2170,21 @@ namespace BgClicker
             }
         }
 
-        private async Task BringPageToFrontAsync()
+        private Task BringPageToFrontAsync()
         {
+            return BringPageToFrontAsync(_cdp);
+        }
+
+        private async Task BringPageToFrontAsync(CdpConnection connection)
+        {
+            if (connection == null)
+            {
+                return;
+            }
+
             try
             {
-                Dictionary<string, object> info = await _cdp.SendAsync(
+                Dictionary<string, object> info = await connection.SendAsync(
                     "Browser.getWindowForTarget", new Dictionary<string, object>(), 3000);
                 var result = info.ContainsKey("result")
                     ? info["result"] as Dictionary<string, object>
@@ -1951,7 +2206,7 @@ namespace BgClicker
                             { "windowId", result["windowId"] },
                             { "bounds", new Dictionary<string, object> { { "windowState", "normal" } } }
                         };
-                        await _cdp.SendAsync("Browser.setWindowBounds", parameters, 3000);
+                        await connection.SendAsync("Browser.setWindowBounds", parameters, 3000);
                     }
                 }
             }
@@ -1961,7 +2216,7 @@ namespace BgClicker
 
             try
             {
-                await _cdp.SendAsync("Page.bringToFront", new Dictionary<string, object>(), 3000);
+                await connection.SendAsync("Page.bringToFront", new Dictionary<string, object>(), 3000);
             }
             catch
             {
