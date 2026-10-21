@@ -19,15 +19,19 @@ namespace BgClicker
 
         private CdpConnection _cdp;
         private string _cdpUrl;
+        private readonly Dictionary<string, CdpConnection> _connections =
+            new Dictionary<string, CdpConnection>();
 
         private FlowLayoutPanel _tabBar;
         private Panel _pageHost;
         private Panel _pageBrowser;
         private Panel _pageWindow;
         private Panel _pageSettings;
+        private Panel _pageTargets;
         private Button _btnTabBrowser;
         private Button _btnTabWindow;
         private Button _btnTabSettings;
+        private Button _btnTabTargets;
         private RadioButton _rbThemeDark;
         private RadioButton _rbThemeLight;
         private RadioButton _rbThemeSystem;
@@ -44,14 +48,22 @@ namespace BgClicker
         private CheckBox _chkSeparate;
         private Button _btnPickBrowser;
         private Button _btnTestBrowser;
+        private Button _btnAddBrowserTarget;
         private NumericUpDown _numX;
         private NumericUpDown _numY;
         private Label _lblPointBrowser;
 
         private Button _btnPickWindow;
         private Button _btnTestWindow;
+        private Button _btnAddWindowTarget;
         private Label _lblWindow;
         private ComboBox _cmbPart;
+
+        private CheckBox _chkAutoReload;
+        private NumericUpDown _numReload;
+        private ListBox _lstTargets;
+        private Label _lblTargetsCount;
+        private readonly List<ClickTarget> _targets = new List<ClickTarget>();
 
         private NumericUpDown _numCps;
         private NumericUpDown _numJitter;
@@ -133,6 +145,7 @@ namespace BgClicker
             BuildBrowserTab();
             BuildWindowTab();
             BuildSettingsTab();
+            BuildTargetsTab();
 
             TableLayoutPanel bottom = BuildBottomPanel();
 
@@ -164,14 +177,17 @@ namespace BgClicker
             _btnTabBrowser = MakeTabButton("Браузер (Chrome / Edge)");
             _btnTabWindow = MakeTabButton("Любое окно");
             _btnTabSettings = MakeTabButton("Настройки");
+            _btnTabTargets = MakeTabButton("Цели");
 
             _btnTabBrowser.Click += delegate { SelectTab(0, true); };
             _btnTabWindow.Click += delegate { SelectTab(1, true); };
             _btnTabSettings.Click += delegate { SelectTab(2, true); };
+            _btnTabTargets.Click += delegate { SelectTab(3, true); };
 
             _tabBar.Controls.Add(_btnTabBrowser);
             _tabBar.Controls.Add(_btnTabWindow);
             _tabBar.Controls.Add(_btnTabSettings);
+            _tabBar.Controls.Add(_btnTabTargets);
         }
 
         private static Button MakeTabButton(string text)
@@ -194,10 +210,12 @@ namespace BgClicker
             _pageBrowser = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             _pageWindow = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             _pageSettings = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            _pageTargets = new Panel { Dock = DockStyle.Fill };
 
             _pageHost.Controls.Add(_pageBrowser);
             _pageHost.Controls.Add(_pageWindow);
             _pageHost.Controls.Add(_pageSettings);
+            _pageHost.Controls.Add(_pageTargets);
         }
 
         private void SelectTab(int index, bool save)
@@ -217,6 +235,7 @@ namespace BgClicker
                 _pageBrowser.Visible = index == 0;
                 _pageWindow.Visible = index == 1;
                 _pageSettings.Visible = index == 2;
+                _pageTargets.Visible = index == 3;
             }
 
             if (index == 0)
@@ -257,7 +276,7 @@ namespace BgClicker
                 return;
             }
 
-            Button[] buttons = { _btnTabBrowser, _btnTabWindow, _btnTabSettings };
+            Button[] buttons = { _btnTabBrowser, _btnTabWindow, _btnTabSettings, _btnTabTargets };
             for (int i = 0; i < buttons.Length; i++)
             {
                 bool selected = i == _selectedTab;
@@ -430,10 +449,10 @@ namespace BgClicker
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 1,
-                RowCount = 3
+                RowCount = 4
             };
             pointGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 4; i++)
             {
                 pointGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             }
@@ -521,6 +540,32 @@ namespace BgClicker
             pointGrid.Controls.Add(pointFlow, 0, 0);
             pointGrid.Controls.Add(_lblPointBrowser, 0, 1);
             pointGrid.Controls.Add(testFlow, 0, 2);
+
+            var addFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                WrapContents = false,
+                Margin = new Padding(0, 6, 0, 0)
+            };
+            _btnAddBrowserTarget = new Button
+            {
+                Text = "Добавить вкладку в цели",
+                AutoSize = true,
+                Margin = new Padding(0)
+            };
+            _btnAddBrowserTarget.Click += OnAddBrowserTargetClick;
+            addFlow.Controls.Add(_btnAddBrowserTarget);
+            addFlow.Controls.Add(new Label
+            {
+                Text = "Цель = вкладка + текущая точка.",
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Tag = "hint",
+                Margin = new Padding(12, 7, 0, 0)
+            });
+            pointGrid.Controls.Add(addFlow, 0, 3);
+
             groupPoint.Controls.Add(pointGrid);
 
             page.Controls.Add(groupConnection, 0, 0);
@@ -535,10 +580,10 @@ namespace BgClicker
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 1,
-                RowCount = 5
+                RowCount = 6
             };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 6; i++)
             {
                 page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             }
@@ -604,11 +649,20 @@ namespace BgClicker
             };
             _btnTestWindow.Click += OnTestWindowClick;
 
+            _btnAddWindowTarget = new Button
+            {
+                Text = "Добавить окно в цели",
+                AutoSize = true,
+                Margin = new Padding(0, 8, 0, 0)
+            };
+            _btnAddWindowTarget.Click += OnAddWindowTargetClick;
+
             page.Controls.Add(hint, 0, 0);
             page.Controls.Add(_btnPickWindow, 0, 1);
             page.Controls.Add(_lblWindow, 0, 2);
             page.Controls.Add(partFlow, 0, 3);
             page.Controls.Add(_btnTestWindow, 0, 4);
+            page.Controls.Add(_btnAddWindowTarget, 0, 5);
             _pageWindow.Controls.Add(page);
         }
 
@@ -619,9 +673,10 @@ namespace BgClicker
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 1,
-                RowCount = 1
+                RowCount = 2
             };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             var group = new ThemedGroupBox
@@ -697,7 +752,151 @@ namespace BgClicker
 
             group.Controls.Add(flow);
             page.Controls.Add(group, 0, 0);
+
+            var reloadGroup = new ThemedGroupBox
+            {
+                Text = "Автообновление страницы",
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(10, 4, 10, 10),
+                Margin = new Padding(0, 8, 0, 0)
+            };
+
+            var reloadFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                Margin = new Padding(0)
+            };
+
+            _chkAutoReload = new CheckBox
+            {
+                Text = "Обновлять страницу автоматически",
+                AutoSize = true,
+                Margin = new Padding(0, 4, 0, 4)
+            };
+
+            var intervalFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                WrapContents = false,
+                Margin = new Padding(0, 4, 0, 0)
+            };
+            intervalFlow.Controls.Add(new Label
+            {
+                Text = "Интервал:",
+                AutoSize = true,
+                Margin = new Padding(0, 7, 6, 0)
+            });
+            _numReload = new NumericUpDown
+            {
+                Width = 70,
+                Minimum = 10,
+                Maximum = 3600,
+                Value = 120,
+                Margin = new Padding(0, 3, 6, 0)
+            };
+            intervalFlow.Controls.Add(_numReload);
+            intervalFlow.Controls.Add(new Label
+            {
+                Text = "сек",
+                AutoSize = true,
+                Margin = new Padding(0, 7, 0, 0)
+            });
+
+            _chkAutoReload.CheckedChanged += delegate
+            {
+                _numReload.Enabled = _chkAutoReload.Checked;
+            };
+
+            reloadFlow.Controls.Add(_chkAutoReload);
+            reloadFlow.Controls.Add(intervalFlow);
+            reloadFlow.Controls.Add(new Label
+            {
+                Text = "Для целей-вкладок. На время загрузки клики приостанавливаются.",
+                AutoSize = true,
+                Tag = "hint",
+                Margin = new Padding(0, 8, 0, 0)
+            });
+            reloadGroup.Controls.Add(reloadFlow);
+            page.Controls.Add(reloadGroup, 0, 1);
+
             _pageSettings.Controls.Add(page);
+        }
+
+        private void BuildTargetsTab()
+        {
+            var page = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(8)
+            };
+            page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            page.Controls.Add(new Label
+            {
+                Text = "Кликер будет кликать по всем целям за один цикл. " +
+                       "Добавляйте вкладки на вкладке «Браузер», окна — на вкладке «Любое окно».",
+                AutoSize = true,
+                MaximumSize = new Size(720, 0),
+                ForeColor = Color.DimGray,
+                Tag = "hint",
+                Margin = new Padding(0, 0, 0, 6)
+            }, 0, 0);
+
+            _lstTargets = new ListBox
+            {
+                Dock = DockStyle.Fill,
+                IntegralHeight = false,
+                SelectionMode = SelectionMode.One,
+                Margin = new Padding(0, 0, 0, 6)
+            };
+            page.Controls.Add(_lstTargets, 0, 1);
+
+            var buttons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                WrapContents = false,
+                Margin = new Padding(0)
+            };
+            var remove = new Button
+            {
+                Text = "Удалить выбранную",
+                AutoSize = true,
+                Margin = new Padding(0, 0, 6, 0)
+            };
+            remove.Click += OnRemoveTargetClick;
+            var clear = new Button
+            {
+                Text = "Очистить",
+                AutoSize = true,
+                Margin = new Padding(0)
+            };
+            clear.Click += OnClearTargetsClick;
+            _lblTargetsCount = new Label
+            {
+                Text = "Целей: 0",
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Tag = "hint",
+                Margin = new Padding(12, 7, 0, 0)
+            };
+            buttons.Controls.Add(remove);
+            buttons.Controls.Add(clear);
+            buttons.Controls.Add(_lblTargetsCount);
+            page.Controls.Add(buttons, 0, 2);
+
+            _pageTargets.Controls.Add(page);
         }
 
         private TableLayoutPanel BuildBottomPanel()
@@ -858,6 +1057,24 @@ namespace BgClicker
                 _rbThemeDark.Checked = _cfg.Theme == "dark";
                 _rbThemeLight.Checked = _cfg.Theme == "light";
                 _rbThemeSystem.Checked = _cfg.Theme != "dark" && _cfg.Theme != "light";
+                _chkAutoReload.Checked = _cfg.AutoReload;
+                _numReload.Value = Clamp(_cfg.ReloadSeconds, 10, 3600);
+                _numReload.Enabled = _chkAutoReload.Checked;
+
+                _targets.Clear();
+                if (_cfg.Targets != null)
+                {
+                    foreach (ClickTargetSettings saved in _cfg.Targets)
+                    {
+                        if (saved != null)
+                        {
+                            _targets.Add(new ClickTarget { Config = saved });
+                        }
+                    }
+                }
+
+                RefreshTargetList();
+
                 SelectTab(_lastMode, false);
                 _numCps.Maximum = _lastMode == 0 ? 200 : 1000;
                 _numCps.Value = Clamp(_cfg.Cps, 1, (int)_numCps.Maximum);
@@ -893,6 +1110,14 @@ namespace BgClicker
             _cfg.WindowTitle = _winTitle;
             _cfg.SeparateProfile = _chkSeparate.Checked;
             _cfg.UseDeepChild = _cmbPart.SelectedIndex != 1;
+            _cfg.AutoReload = _chkAutoReload.Checked;
+            _cfg.ReloadSeconds = (int)_numReload.Value;
+            _cfg.Targets = new List<ClickTargetSettings>();
+            foreach (ClickTarget target in _targets)
+            {
+                _cfg.Targets.Add(target.Config);
+            }
+
             if (_cmbTabs.SelectedItem != null)
             {
                 _cfg.BrowserUrl = ((CdpTarget)_cmbTabs.SelectedItem).Url;
@@ -941,7 +1166,13 @@ namespace BgClicker
             menu.Items.Add(exitItem);
 
             _tray.ContextMenuStrip = menu;
-            _tray.DoubleClick += delegate { ShowFromTray(); };
+            _tray.MouseClick += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    ShowFromTray();
+                }
+            };
             _tip.SetToolTip(_btnPickBrowser, "Нажмите, затем кликните в нужную точку на странице браузера.");
         }
 
@@ -1008,7 +1239,11 @@ namespace BgClicker
             _btnStart.Enabled = false;
             try
             {
-                if (_lastMode == 0)
+                if (_targets.Count > 0)
+                {
+                    await StartTargetsAsync();
+                }
+                else if (_lastMode == 0)
                 {
                     await StartBrowserAsync();
                 }
@@ -1024,6 +1259,247 @@ namespace BgClicker
             }
         }
 
+        private async Task StartTargetsAsync()
+        {
+            var snapshot = new List<ClickTarget>(_targets);
+            if (snapshot.Count == 0)
+            {
+                return;
+            }
+
+            SetStatus("Подключаюсь к целям...", false);
+
+            foreach (ClickTarget target in snapshot)
+            {
+                if (target.Config.Browser)
+                {
+                    try
+                    {
+                        var info = new CdpTarget
+                        {
+                            WsUrl = target.Config.WsUrl,
+                            Url = target.Config.Url,
+                            Title = target.Config.Title
+                        };
+                        target.Connection = await GetConnectionAsync(info);
+                    }
+                    catch (Exception ex)
+                    {
+                        SetStatus("Не удалось подключиться к «" + target + "»: " + ex.Message, true);
+                        return;
+                    }
+                }
+                else
+                {
+                    IntPtr hWnd = target.Config.UseRoot
+                        ? new IntPtr(target.Config.Root)
+                        : new IntPtr(target.Config.Deep);
+                    if (!Native.IsWindow(hWnd))
+                    {
+                        SetStatus("Окно цели закрыто: " + target, true);
+                        return;
+                    }
+                }
+            }
+
+            int cps = (int)_numCps.Value;
+            int jitter = (int)_numJitter.Value;
+            int reloadSeconds = _chkAutoReload.Checked ? (int)_numReload.Value : 0;
+            Action reload = null;
+
+            if (reloadSeconds > 0)
+            {
+                reload = delegate
+                {
+                    foreach (ClickTarget target in snapshot)
+                    {
+                        if (!target.Config.Browser || target.Connection == null)
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            target.Connection.ReloadSync();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                };
+            }
+
+            bool started = _engine.Start(
+                delegate
+                {
+                    foreach (ClickTarget target in snapshot)
+                    {
+                        if (target.Config.Browser)
+                        {
+                            target.Connection.ClickSync(target.Config.X, target.Config.Y);
+                        }
+                        else
+                        {
+                            IntPtr hWnd = target.Config.UseRoot
+                                ? new IntPtr(target.Config.Root)
+                                : new IntPtr(target.Config.Deep);
+                            Point point = target.Config.UseRoot
+                                ? new Point(target.Config.RootX, target.Config.RootY)
+                                : new Point(target.Config.DeepX, target.Config.DeepY);
+                            if (!Native.PostClick(hWnd, point.X, point.Y))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
+                    return true;
+                },
+                cps,
+                jitter,
+                reload,
+                reloadSeconds);
+
+            if (!started)
+            {
+                SetStatus("Не удалось запустить: предыдущий поток ещё завершается", true);
+                return;
+            }
+
+            _wasRunning = true;
+            UpdateRunUi();
+            SetStatus("Работает · 0 циклов", false);
+            SaveSettings();
+        }
+
+        private void RefreshTargetList()
+        {
+            if (_lstTargets == null)
+            {
+                return;
+            }
+
+            _lstTargets.BeginUpdate();
+            _lstTargets.Items.Clear();
+            foreach (ClickTarget target in _targets)
+            {
+                _lstTargets.Items.Add(target);
+            }
+            _lstTargets.EndUpdate();
+
+            if (_lblTargetsCount != null)
+            {
+                _lblTargetsCount.Text = "Целей: " + _targets.Count;
+            }
+        }
+
+        private void OnAddBrowserTargetClick(object sender, EventArgs e)
+        {
+            var tab = _cmbTabs.SelectedItem as CdpTarget;
+            if (tab == null)
+            {
+                SetStatus("Сначала выберите вкладку", true);
+                return;
+            }
+
+            double x = (double)_numX.Value;
+            double y = (double)_numY.Value;
+            ClickTarget existing = _targets.Find(delegate(ClickTarget target)
+            {
+                return target.Config.Browser && target.Config.WsUrl == tab.WsUrl;
+            });
+
+            if (existing != null)
+            {
+                existing.Config.X = x;
+                existing.Config.Y = y;
+                existing.Config.Title = tab.Title;
+                existing.Config.Url = tab.Url;
+            }
+            else
+            {
+                _targets.Add(new ClickTarget
+                {
+                    Config = new ClickTargetSettings
+                    {
+                        Browser = true,
+                        Title = tab.Title,
+                        Url = tab.Url,
+                        WsUrl = tab.WsUrl,
+                        X = x,
+                        Y = y
+                    }
+                });
+            }
+
+            RefreshTargetList();
+            SaveSettings();
+            SetStatus("Цель добавлена: " + tab.Title, false);
+        }
+
+        private void OnAddWindowTargetClick(object sender, EventArgs e)
+        {
+            if (!Native.IsWindow(_hwndRoot))
+            {
+                SetStatus("Сначала выберите окно и точку", true);
+                return;
+            }
+
+            IntPtr deep = Native.IsWindow(_hwndDeep) ? _hwndDeep : _hwndRoot;
+            Point deepPoint = deep == _hwndDeep ? _ptDeep : _ptRoot;
+            long rootHandle = _hwndRoot.ToInt64();
+            ClickTarget existing = _targets.Find(delegate(ClickTarget target)
+            {
+                return !target.Config.Browser && target.Config.Root == rootHandle;
+            });
+
+            var config = new ClickTargetSettings
+            {
+                Browser = false,
+                Title = _winTitle,
+                Deep = deep.ToInt64(),
+                Root = rootHandle,
+                DeepX = deepPoint.X,
+                DeepY = deepPoint.Y,
+                RootX = _ptRoot.X,
+                RootY = _ptRoot.Y,
+                UseRoot = _cmbPart.SelectedIndex == 1
+            };
+
+            if (existing != null)
+            {
+                existing.Config = config;
+            }
+            else
+            {
+                _targets.Add(new ClickTarget { Config = config });
+            }
+
+            RefreshTargetList();
+            SaveSettings();
+            SetStatus("Цель добавлена: " + (_winTitle.Length > 0 ? _winTitle : "(без названия)"), false);
+        }
+
+        private void OnRemoveTargetClick(object sender, EventArgs e)
+        {
+            int index = _lstTargets.SelectedIndex;
+            if (index < 0 || index >= _targets.Count)
+            {
+                return;
+            }
+
+            _targets.RemoveAt(index);
+            RefreshTargetList();
+            SaveSettings();
+        }
+
+        private void OnClearTargetsClick(object sender, EventArgs e)
+        {
+            _targets.Clear();
+            RefreshTargetList();
+            SaveSettings();
+        }
+
         private async Task StartBrowserAsync()
         {
             SetStatus("Подключаюсь к браузеру...", false);
@@ -1037,6 +1513,10 @@ namespace BgClicker
             int y = (int)_numY.Value;
             int cps = (int)_numCps.Value;
             int jitter = (int)_numJitter.Value;
+            int reloadSeconds = _chkAutoReload.Checked ? (int)_numReload.Value : 0;
+            Action reload = reloadSeconds > 0
+                ? new Action(delegate { connection.ReloadSync(); })
+                : null;
 
             bool started = _engine.Start(
                 delegate
@@ -1045,7 +1525,9 @@ namespace BgClicker
                     return true;
                 },
                 cps,
-                jitter);
+                jitter,
+                reload,
+                reloadSeconds);
 
             if (!started)
             {
@@ -1146,32 +1628,49 @@ namespace BgClicker
                 return true;
             }
 
-            CloseCdp();
             try
             {
-                var connection = new CdpConnection();
-                await connection.ConnectAsync(target);
-                _cdp = connection;
+                _cdp = await GetConnectionAsync(target);
                 _cdpUrl = target.WsUrl;
                 _lblCdp.Text = "Подключено: " + (target.Title ?? target.Url);
                 return true;
             }
             catch (Exception ex)
             {
-                CloseCdp();
                 SetStatus("Не удалось подключиться: " + ex.Message, true);
                 return false;
             }
         }
 
-        private void CloseCdp()
+        private async Task<CdpConnection> GetConnectionAsync(CdpTarget target)
         {
-            if (_cdp != null)
+            CdpConnection connection;
+            if (_connections.TryGetValue(target.WsUrl, out connection) && connection.IsConnected)
             {
-                _cdp.Dispose();
-                _cdp = null;
+                return connection;
             }
 
+            if (connection != null)
+            {
+                connection.Dispose();
+                _connections.Remove(target.WsUrl);
+            }
+
+            connection = new CdpConnection();
+            await connection.ConnectAsync(target);
+            _connections[target.WsUrl] = connection;
+            return connection;
+        }
+
+        private void CloseCdp()
+        {
+            foreach (CdpConnection connection in _connections.Values)
+            {
+                connection.Dispose();
+            }
+
+            _connections.Clear();
+            _cdp = null;
             _cdpUrl = null;
         }
 
@@ -1220,6 +1719,38 @@ namespace BgClicker
 
                 _cmbTabs.SelectedIndex = index;
                 _lblCdp.Text = "Порт 9222 открыт · вкладок: " + targets.Count;
+
+                foreach (ClickTarget clickTarget in _targets)
+                {
+                    if (!clickTarget.Config.Browser)
+                    {
+                        continue;
+                    }
+
+                    bool stillOpen = targets.Exists(delegate(CdpTarget item)
+                    {
+                        return item.WsUrl == clickTarget.Config.WsUrl;
+                    });
+                    if (stillOpen)
+                    {
+                        continue;
+                    }
+
+                    // The tab was reopened: update the endpoint only when the URL
+                    // uniquely identifies it. Several identical tabs must keep
+                    // their own WsUrl, otherwise they would collapse into one.
+                    List<CdpTarget> matches = targets.FindAll(delegate(CdpTarget item)
+                    {
+                        return item.Url == clickTarget.Config.Url;
+                    });
+                    if (matches.Count == 1)
+                    {
+                        clickTarget.Config.WsUrl = matches[0].WsUrl;
+                        clickTarget.Config.Title = matches[0].Title;
+                    }
+                }
+
+                RefreshTargetList();
             }
             catch (Exception ex)
             {
@@ -1795,6 +2326,30 @@ namespace BgClicker
                 {
                 }
             }));
+        }
+
+        private sealed class ClickTarget
+        {
+            public ClickTargetSettings Config;
+            public CdpConnection Connection;
+
+            public override string ToString()
+            {
+                string title = string.IsNullOrEmpty(Config.Title) ? (Config.Url ?? "") : Config.Title;
+                if (title.Length > 60)
+                {
+                    title = title.Substring(0, 57) + "...";
+                }
+
+                double x = Config.Browser ? Config.X : Config.DeepX;
+                double y = Config.Browser ? Config.Y : Config.DeepY;
+                return string.Format(
+                    "[{0}] {1}  ({2:0}, {3:0})",
+                    Config.Browser ? "Браузер" : "Окно",
+                    title,
+                    x,
+                    y);
+            }
         }
 
         private static int Clamp(int value, int min, int max)

@@ -281,6 +281,12 @@ namespace BgClicker
                     control.ForeColor = palette.Text;
                     ((NumericUpDown)control).BorderStyle = BorderStyle.FixedSingle;
                 }
+                else if (control is ListBox)
+                {
+                    control.BackColor = palette.Input;
+                    control.ForeColor = palette.Text;
+                    ((ListBox)control).BorderStyle = BorderStyle.FixedSingle;
+                }
                 else if (control is ThemedGroupBox)
                 {
                     control.BackColor = palette.Surface;

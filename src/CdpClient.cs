@@ -91,6 +91,8 @@ new Promise(function (resolve) {
         private Task _receiveTask;
         private int _nextId;
         private volatile bool _closed = true;
+        private double _lastX = double.NaN;
+        private double _lastY = double.NaN;
 
         public bool IsConnected
         {
@@ -211,14 +213,23 @@ new Promise(function (resolve) {
 
         public async Task ClickAsync(double x, double y)
         {
-            var moved = new Dictionary<string, object>
+            if (double.IsNaN(_lastX) ||
+                Math.Abs(x - _lastX) > 0.5 ||
+                Math.Abs(y - _lastY) > 0.5)
             {
-                { "type", "mouseMoved" },
-                { "x", x },
-                { "y", y },
-                { "button", "none" },
-                { "buttons", 0 }
-            };
+                var moved = new Dictionary<string, object>
+                {
+                    { "type", "mouseMoved" },
+                    { "x", x },
+                    { "y", y },
+                    { "button", "none" },
+                    { "buttons", 0 }
+                };
+                await SendNoWaitAsync("Input.dispatchMouseEvent", moved).ConfigureAwait(false);
+                _lastX = x;
+                _lastY = y;
+            }
+
             var pressed = new Dictionary<string, object>
             {
                 { "type", "mousePressed" },
@@ -238,14 +249,24 @@ new Promise(function (resolve) {
                 { "clickCount", 1 }
             };
 
-            await SendNoWaitAsync("Input.dispatchMouseEvent", moved).ConfigureAwait(false);
-            await SendNoWaitAsync("Input.dispatchMouseEvent", pressed).ConfigureAwait(false);
-            await SendNoWaitAsync("Input.dispatchMouseEvent", released).ConfigureAwait(false);
+            // Wait for the browser to process each event. This is deliberate
+            // backpressure: without it a slow page accumulates input events
+            // and eventually freezes.
+            await SendAsync("Input.dispatchMouseEvent", pressed, 2000).ConfigureAwait(false);
+            await SendAsync("Input.dispatchMouseEvent", released, 2000).ConfigureAwait(false);
         }
 
         public void ClickSync(double x, double y)
         {
             ClickAsync(x, y).GetAwaiter().GetResult();
+        }
+
+        public void ReloadSync()
+        {
+            var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
+            SendAsync("Page.reload", parameters, 5000).GetAwaiter().GetResult();
+            _lastX = double.NaN;
+            _lastY = double.NaN;
         }
 
         public async Task<object> EvaluateAsync(string expression, bool awaitPromise, int timeoutMs)

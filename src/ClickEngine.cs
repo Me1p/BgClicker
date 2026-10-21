@@ -30,7 +30,12 @@ namespace BgClicker
             get { return _lastError; }
         }
 
-        public bool Start(Func<bool> click, int clicksPerSecond, int jitterPercent)
+        public bool Start(
+            Func<bool> click,
+            int clicksPerSecond,
+            int jitterPercent,
+            Action reload = null,
+            int reloadSeconds = 0)
         {
             Stop();
             if (_thread != null)
@@ -46,7 +51,10 @@ namespace BgClicker
             double baseInterval = Math.Max(1.0, 1000.0 / Math.Max(1, clicksPerSecond));
             int jitter = Math.Max(0, Math.Min(50, jitterPercent));
 
-            _thread = new Thread(new ThreadStart(delegate { Run(click, baseInterval, jitter); }));
+            _thread = new Thread(new ThreadStart(delegate
+            {
+                Run(click, baseInterval, jitter, reload, reloadSeconds);
+            }));
             _thread.IsBackground = true;
             _thread.Name = "BgClicker";
             _thread.Priority = ThreadPriority.AboveNormal;
@@ -69,17 +77,32 @@ namespace BgClicker
             }
         }
 
-        private void Run(Func<bool> click, double baseInterval, int jitter)
+        private void Run(Func<bool> click, double baseInterval, int jitter, Action reload, int reloadSeconds)
         {
             Native.timeBeginPeriod(1);
             var random = new Random();
             var watch = Stopwatch.StartNew();
             double next = 0;
+            double nextReload = reload != null && reloadSeconds > 0
+                ? reloadSeconds * 1000.0
+                : double.MaxValue;
 
             try
             {
                 while (_running)
                 {
+                    if (reload != null && watch.Elapsed.TotalMilliseconds >= nextReload)
+                    {
+                        reload();
+                        for (int i = 0; i < 15 && _running; i++)
+                        {
+                            Thread.Sleep(100);
+                        }
+
+                        nextReload = watch.Elapsed.TotalMilliseconds + (reloadSeconds * 1000.0);
+                        continue;
+                    }
+
                     if (!click())
                     {
                         _lastError = "Окно недоступно (закрыто или пересоздано)";

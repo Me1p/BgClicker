@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Web.Script.Serialization;
 
@@ -24,6 +25,9 @@ namespace BgClicker
         public bool SeparateProfile { get; set; }
         public bool UseDeepChild { get; set; }
         public string Theme { get; set; }
+        public List<ClickTargetSettings> Targets { get; set; }
+        public bool AutoReload { get; set; }
+        public int ReloadSeconds { get; set; }
 
         public AppSettings()
         {
@@ -39,6 +43,9 @@ namespace BgClicker
             SeparateProfile = true;
             UseDeepChild = true;
             Theme = "dark";
+            Targets = new List<ClickTargetSettings>();
+            AutoReload = false;
+            ReloadSeconds = 120;
         }
 
         private static string StorageDir
