@@ -90,6 +90,7 @@ namespace BgClicker
         private bool _exiting;
         private bool _wasRunning;
         private bool _balloonShown;
+        private int _skippedTargets;
         private readonly bool _restrictedEnvironment;
         private readonly string _environmentError;
 
@@ -1094,6 +1095,7 @@ namespace BgClicker
                     }
                 }
 
+                DeduplicateTargets();
                 RefreshTargetList();
 
                 SelectTab(_lastMode, false);
@@ -1282,6 +1284,9 @@ namespace BgClicker
 
         private async Task StartTargetsAsync()
         {
+            DeduplicateTargets();
+            RefreshTargetList();
+
             var snapshot = new List<ClickTarget>(_targets);
             if (snapshot.Count == 0)
             {
@@ -1293,17 +1298,20 @@ namespace BgClicker
             SetStatus("Подключаюсь к целям...", false);
 
             var used = new HashSet<string>();
+            var active = new List<ClickTarget>();
+            int skipped = 0;
+
             foreach (ClickTarget target in snapshot)
             {
                 if (target.Config.Browser)
                 {
-                    if (!await EnsureTargetConnectedAsync(target, used))
+                    if (await EnsureTargetConnectedAsync(target, used))
                     {
-                        SetStatus(
-                            "Вкладка «" + target + "» не найдена. Нажмите «Подключить / обновить список» " +
-                            "или добавьте вкладку заново.",
-                            true);
-                        return;
+                        active.Add(target);
+                    }
+                    else
+                    {
+                        skipped++;
                     }
                 }
                 else
@@ -1311,12 +1319,24 @@ namespace BgClicker
                     IntPtr hWnd = target.Config.UseRoot
                         ? new IntPtr(target.Config.Root)
                         : new IntPtr(target.Config.Deep);
-                    if (!Native.IsWindow(hWnd))
+                    if (Native.IsWindow(hWnd))
                     {
-                        SetStatus("Окно цели закрыто: " + target, true);
-                        return;
+                        active.Add(target);
+                    }
+                    else
+                    {
+                        skipped++;
                     }
                 }
+            }
+
+            if (active.Count == 0)
+            {
+                SetStatus(
+                    "Не найдено ни одной доступной цели. Проверьте, что вкладки открыты, " +
+                    "и удалите лишние цели в «Целях».",
+                    true);
+                return;
             }
 
             int cps = (int)_numCps.Value;
@@ -1328,7 +1348,7 @@ namespace BgClicker
             {
                 reload = delegate
                 {
-                    foreach (ClickTarget target in snapshot)
+                    foreach (ClickTarget target in active)
                     {
                         if (!target.Config.Browser || target.Connection == null)
                         {
@@ -1349,7 +1369,7 @@ namespace BgClicker
             bool started = _engine.Start(
                 delegate
                 {
-                    foreach (ClickTarget target in snapshot)
+                    foreach (ClickTarget target in active)
                     {
                         if (target.Config.Browser)
                         {
@@ -1384,8 +1404,11 @@ namespace BgClicker
             }
 
             _wasRunning = true;
+            _skippedTargets = skipped;
             UpdateRunUi();
-            SetStatus("Работает · 0 циклов", false);
+            SetStatus(
+                "Работает · 0 кликов" + (skipped > 0 ? " · пропущено целей: " + skipped : ""),
+                false);
             SaveSettings();
         }
 
@@ -1410,6 +1433,58 @@ namespace BgClicker
             }
         }
 
+        private bool DeduplicateTargets()
+        {
+            var seenWs = new HashSet<string>();
+            var seenId = new HashSet<string>();
+            bool removed = false;
+
+            for (int i = _targets.Count - 1; i >= 0; i--)
+            {
+                ClickTargetSettings config = _targets[i].Config;
+                if (!config.Browser)
+                {
+                    string windowKey = config.Root == 0 ? null : "w:" + config.Root;
+                    if (windowKey != null && !seenWs.Add(windowKey))
+                    {
+                        _targets.RemoveAt(i);
+                        removed = true;
+                    }
+
+                    continue;
+                }
+
+                bool duplicate = false;
+                if (!string.IsNullOrEmpty(config.Id) && !seenId.Add(config.Id))
+                {
+                    duplicate = true;
+                }
+
+                if (!string.IsNullOrEmpty(config.WsUrl) && !seenWs.Add(config.WsUrl))
+                {
+                    duplicate = true;
+                }
+
+                if (duplicate)
+                {
+                    _targets.RemoveAt(i);
+                    removed = true;
+                }
+            }
+
+            return removed;
+        }
+
+        private bool HasBrowserTargetForUrl(string url)
+        {
+            string normalized = NormalizeUrl(url);
+            return _targets.Exists(delegate(ClickTarget target)
+            {
+                return target.Config.Browser &&
+                       NormalizeUrl(target.Config.Url) == normalized;
+            });
+        }
+
         private void OnAddBrowserTargetClick(object sender, EventArgs e)
         {
             var tab = _cmbTabs.SelectedItem as CdpTarget;
@@ -1422,6 +1497,7 @@ namespace BgClicker
             double x = (double)_numX.Value;
             double y = (double)_numY.Value;
             AddOrUpdateBrowserTarget(tab, x, y);
+            DeduplicateTargets();
             RefreshTargetList();
             SaveSettings();
             SetStatus("Цель добавлена: " + tab.Title, false);
@@ -1431,13 +1507,16 @@ namespace BgClicker
         {
             ClickTarget existing = _targets.Find(delegate(ClickTarget target)
             {
-                return target.Config.Browser && target.Config.WsUrl == tab.WsUrl;
+                return target.Config.Browser &&
+                       ((!string.IsNullOrEmpty(tab.Id) && target.Config.Id == tab.Id) ||
+                        target.Config.WsUrl == tab.WsUrl);
             });
 
             if (existing != null)
             {
                 existing.Config.X = x;
                 existing.Config.Y = y;
+                existing.Config.Id = tab.Id;
                 existing.Config.Title = tab.Title;
                 existing.Config.Url = tab.Url;
             }
@@ -1448,6 +1527,7 @@ namespace BgClicker
                     Config = new ClickTargetSettings
                     {
                         Browser = true,
+                        Id = tab.Id,
                         Title = tab.Title,
                         Url = tab.Url,
                         WsUrl = tab.WsUrl,
@@ -1474,7 +1554,8 @@ namespace BgClicker
                 double y = (double)_numY.Value;
 
                 var selected = _cmbTabs.SelectedItem as CdpTarget;
-                if (selected != null && IsWebUrl(selected.Url))
+                if (selected != null && IsWebUrl(selected.Url) &&
+                    !HasBrowserTargetForUrl(selected.Url))
                 {
                     AddOrUpdateBrowserTarget(selected, x, y);
                 }
@@ -1484,6 +1565,7 @@ namespace BgClicker
                 var config = new ClickTargetSettings
                 {
                     Browser = true,
+                    Id = created.Id,
                     Title = title,
                     Url = created.Url,
                     WsUrl = created.WsUrl,
@@ -1491,6 +1573,7 @@ namespace BgClicker
                     Y = y
                 };
                 _targets.Add(new ClickTarget { Config = config });
+                DeduplicateTargets();
                 RefreshTargetList();
                 await RefreshTargetsAsync(false);
                 SelectComboTarget(created.WsUrl);
@@ -1630,6 +1713,7 @@ namespace BgClicker
                 return false;
             }
 
+            target.Config.Id = match.Id;
             target.Config.WsUrl = match.WsUrl;
             target.Config.Url = match.Url;
             if (!string.IsNullOrEmpty(match.Title))
@@ -1663,6 +1747,19 @@ namespace BgClicker
             ClickTargetSettings config,
             HashSet<string> used = null)
         {
+            if (!string.IsNullOrEmpty(config.Id))
+            {
+                CdpTarget byId = targets.Find(delegate(CdpTarget item)
+                {
+                    return item.Id == config.Id &&
+                           (used == null || !used.Contains(item.WsUrl));
+                });
+                if (byId != null)
+                {
+                    return byId;
+                }
+            }
+
             CdpTarget exact = targets.Find(delegate(CdpTarget item)
             {
                 return item.WsUrl == config.WsUrl &&
@@ -1690,7 +1787,14 @@ namespace BgClicker
 
         private static string NormalizeUrl(string url)
         {
-            return (url ?? "").TrimEnd('/');
+            string value = url ?? "";
+            int cut = value.IndexOfAny(new[] { '?', '#' });
+            if (cut >= 0)
+            {
+                value = value.Substring(0, cut);
+            }
+
+            return value.TrimEnd('/');
         }
 
         private void OnAddWindowTargetClick(object sender, EventArgs e)
@@ -1731,6 +1835,7 @@ namespace BgClicker
                 _targets.Add(new ClickTarget { Config = config });
             }
 
+            DeduplicateTargets();
             RefreshTargetList();
             SaveSettings();
             SetStatus("Цель добавлена: " + (_winTitle.Length > 0 ? _winTitle : "(без названия)"), false);
@@ -1758,6 +1863,7 @@ namespace BgClicker
 
         private async Task StartBrowserAsync()
         {
+            _skippedTargets = 0;
             SetStatus("Подключаюсь к браузеру...", false);
             if (!await EnsureConnectedAsync())
             {
@@ -1799,6 +1905,7 @@ namespace BgClicker
 
         private void StartWindowClicking()
         {
+            _skippedTargets = 0;
             IntPtr target;
             Point point;
             if (!ResolveWindow(out target, out point))
@@ -1986,6 +2093,7 @@ namespace BgClicker
                     CdpTarget match = FindTarget(targets, clickTarget.Config);
                     if (match != null)
                     {
+                        clickTarget.Config.Id = match.Id;
                         clickTarget.Config.WsUrl = match.WsUrl;
                         clickTarget.Config.Url = match.Url;
                         if (!string.IsNullOrEmpty(match.Title))
@@ -1995,7 +2103,12 @@ namespace BgClicker
                     }
                 }
 
+                DeduplicateTargets();
                 RefreshTargetList();
+                if (!_engine.IsRunning)
+                {
+                    SetStatus("Список обновлён · целей: " + _targets.Count, false);
+                }
             }
             catch (Exception ex)
             {
@@ -2329,7 +2442,12 @@ namespace BgClicker
             if (_engine.IsRunning)
             {
                 _wasRunning = true;
-                SetStatus(string.Format("Работает · {0:N0} кликов", _engine.Count), false);
+                SetStatus(
+                    string.Format(
+                        "Работает · {0:N0} кликов{1}",
+                        _engine.Count,
+                        _skippedTargets > 0 ? " · пропущено целей: " + _skippedTargets : ""),
+                    false);
             }
             else if (_wasRunning)
             {
