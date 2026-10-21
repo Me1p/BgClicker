@@ -2372,7 +2372,7 @@ namespace BgClicker
             try
             {
                 string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "BgClicker",
                     "logs");
                 Directory.CreateDirectory(dir);
@@ -2401,6 +2401,16 @@ namespace BgClicker
                 if (File.Exists(legacy))
                 {
                     File.Delete(legacy);
+                }
+
+                string oldLocal = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "BgClicker",
+                    "logs",
+                    "launch.log");
+                if (File.Exists(oldLocal))
+                {
+                    File.Delete(oldLocal);
                 }
             }
             catch

@@ -75,6 +75,10 @@
 
 Тема применяется сразу, перекрашивает заголовок окна и сохраняется.
 
+## Диагностика
+
+Лог работы: `%APPDATA%\BgClicker\logs\launch.log` (рядом с exe ничего не создаётся).
+
 ## Сборка
 
 Нужен Windows и Roslyn-компилятор из Visual Studio Build Tools (либо .NET Framework 4.8 +
