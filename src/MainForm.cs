@@ -378,7 +378,26 @@ namespace BgClicker
                     return;
                 }
 
-                _cfg.BrowserUrl = ((CdpTarget)_cmbTabs.SelectedItem).Url;
+                var selected = (CdpTarget)_cmbTabs.SelectedItem;
+                _cfg.BrowserUrl = selected.Url;
+
+                ClickTarget target = FindTargetForTab(selected);
+                if (target != null)
+                {
+                    _loading = true;
+                    try
+                    {
+                        _numX.Value = Clamp((int)target.Config.X, 0, 20000);
+                        _numY.Value = Clamp((int)target.Config.Y, 0, 20000);
+                    }
+                    finally
+                    {
+                        _loading = false;
+                    }
+
+                    UpdatePointLabel();
+                }
+
                 SaveSettings();
             };
 
@@ -1491,6 +1510,25 @@ namespace BgClicker
             });
         }
 
+        private ClickTarget FindTargetForTab(CdpTarget tab)
+        {
+            if (tab == null)
+            {
+                return null;
+            }
+
+            return _targets.Find(delegate(ClickTarget target)
+            {
+                if (!target.Config.Browser)
+                {
+                    return false;
+                }
+
+                return (!string.IsNullOrEmpty(tab.Id) && target.Config.Id == tab.Id) ||
+                       target.Config.WsUrl == tab.WsUrl;
+            });
+        }
+
         private void OnAddBrowserTargetClick(object sender, EventArgs e)
         {
             var tab = _cmbTabs.SelectedItem as CdpTarget;
@@ -1673,6 +1711,8 @@ namespace BgClicker
 
                 target.Config.X = Convert.ToDouble(point["x"]);
                 target.Config.Y = Convert.ToDouble(point["y"]);
+                _numX.Value = Clamp((int)target.Config.X, 0, 20000);
+                _numY.Value = Clamp((int)target.Config.Y, 0, 20000);
                 RefreshTargetList();
                 SaveSettings();
                 SetStatus("Точка цели: " + (int)target.Config.X + ", " + (int)target.Config.Y, false);
@@ -2272,7 +2312,20 @@ namespace BgClicker
                     int y = Convert.ToInt32(point["y"]);
                     _numX.Value = Clamp(x, 0, 20000);
                     _numY.Value = Clamp(y, 0, 20000);
-                    SetStatus("Точка сохранена: " + x + ", " + y, false);
+
+                    var selected = _cmbTabs.SelectedItem as CdpTarget;
+                    ClickTarget target = FindTargetForTab(selected);
+                    if (target != null)
+                    {
+                        target.Config.X = x;
+                        target.Config.Y = y;
+                        RefreshTargetList();
+                    }
+
+                    SetStatus(
+                        "Точка сохранена: " + x + ", " + y +
+                        (target != null ? " (для выбранной цели)" : ""),
+                        false);
                     SaveSettings();
                 }
                 else
