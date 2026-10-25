@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -93,6 +94,8 @@ new Promise(function (resolve) {
         private volatile bool _closed = true;
         private double _lastX = double.NaN;
         private double _lastY = double.NaN;
+        private int _clicksSinceHealth;
+        private readonly Stopwatch _healthWatch = Stopwatch.StartNew();
 
         public bool IsConnected
         {
@@ -283,11 +286,51 @@ new Promise(function (resolve) {
                 { "clickCount", 1 }
             };
 
-            // Wait for the browser to process each event. This is deliberate
-            // backpressure: without it a slow page accumulates input events
-            // and eventually freezes.
-            await SendAsync("Input.dispatchMouseEvent", pressed, 2000).ConfigureAwait(false);
-            await SendAsync("Input.dispatchMouseEvent", released, 2000).ConfigureAwait(false);
+            // Fire-and-forget: the browser processes input in order, while the
+            // separate health check catches a page that stopped responding.
+            await SendNoWaitAsync("Input.dispatchMouseEvent", pressed).ConfigureAwait(false);
+            await SendNoWaitAsync("Input.dispatchMouseEvent", released).ConfigureAwait(false);
+
+            _clicksSinceHealth++;
+            if (_clicksSinceHealth >= 100 || _healthWatch.ElapsedMilliseconds >= 2000)
+            {
+                _clicksSinceHealth = 0;
+                _healthWatch.Restart();
+                await CheckHealthAsync().ConfigureAwait(false);
+            }
+        }
+
+        private async Task CheckHealthAsync()
+        {
+            try
+            {
+                var parameters = new Dictionary<string, object>
+                {
+                    { "expression", "1" },
+                    { "returnByValue", true }
+                };
+                await SendAsync("Runtime.evaluate", parameters, 3000).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The renderer is stuck: reload the page instead of stopping
+                // the clicker with a timeout error.
+                TryReload();
+            }
+        }
+
+        private void TryReload()
+        {
+            _lastX = double.NaN;
+            _lastY = double.NaN;
+            try
+            {
+                var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
+                SendNoWaitAsync("Page.reload", parameters).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
         }
 
         public void ClickSync(double x, double y)
@@ -297,10 +340,16 @@ new Promise(function (resolve) {
 
         public void ReloadSync()
         {
-            var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
-            SendAsync("Page.reload", parameters, 5000).GetAwaiter().GetResult();
             _lastX = double.NaN;
             _lastY = double.NaN;
+            try
+            {
+                var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
+                SendNoWaitAsync("Page.reload", parameters).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
         }
 
         public async Task<object> EvaluateAsync(string expression, bool awaitPromise, int timeoutMs)

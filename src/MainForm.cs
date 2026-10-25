@@ -91,6 +91,9 @@ namespace BgClicker
         private bool _wasRunning;
         private bool _balloonShown;
         private int _skippedTargets;
+        private DateTime _rateLastTime;
+        private long _rateLastCount;
+        private double _rateValue;
         private readonly bool _restrictedEnvironment;
         private readonly string _environmentError;
 
@@ -265,7 +268,7 @@ namespace BgClicker
                 return;
             }
 
-            _numCps.Maximum = maximum;
+            _numCps.Maximum = 100000;
             if (_numCps.Value > _numCps.Maximum)
             {
                 _numCps.Value = _numCps.Maximum;
@@ -952,13 +955,14 @@ namespace BgClicker
             });
             _numCps = new NumericUpDown
             {
-                Width = 64,
+                Width = 78,
                 Minimum = 1,
-                Maximum = 200,
+                Maximum = 100000,
                 Value = 10,
                 Margin = new Padding(0, 5, 4, 0)
             };
             settingsFlow.Controls.Add(_numCps);
+            _tip.SetToolTip(_numCps, "Кликов в секунду на каждую цель");
             settingsFlow.Controls.Add(new Label
             {
                 Text = "кликов/с",
@@ -1099,7 +1103,7 @@ namespace BgClicker
                 RefreshTargetList();
 
                 SelectTab(_lastMode, false);
-                _numCps.Maximum = _lastMode == 0 ? 200 : 1000;
+                _numCps.Maximum = 100000;
                 _numCps.Value = Clamp(_cfg.Cps, 1, (int)_numCps.Maximum);
                 _numJitter.Value = Clamp(_cfg.Jitter, 0, 50);
             }
@@ -1286,6 +1290,7 @@ namespace BgClicker
         {
             DeduplicateTargets();
             RefreshTargetList();
+            ResetRate();
 
             var snapshot = new List<ClickTarget>(_targets);
             if (snapshot.Count == 0)
@@ -1395,7 +1400,8 @@ namespace BgClicker
                 cps,
                 jitter,
                 reload,
-                reloadSeconds);
+                reloadSeconds,
+                active.Count);
 
             if (!started)
             {
@@ -1864,6 +1870,7 @@ namespace BgClicker
         private async Task StartBrowserAsync()
         {
             _skippedTargets = 0;
+            ResetRate();
             SetStatus("Подключаюсь к браузеру...", false);
             if (!await EnsureConnectedAsync())
             {
@@ -1906,6 +1913,7 @@ namespace BgClicker
         private void StartWindowClicking()
         {
             _skippedTargets = 0;
+            ResetRate();
             IntPtr target;
             Point point;
             if (!ResolveWindow(out target, out point))
@@ -1938,6 +1946,7 @@ namespace BgClicker
         {
             _engine.Stop();
             _wasRunning = false;
+            _rateValue = 0;
             UpdateRunUi();
             SetStatus("Остановлено · " + _engine.Count.ToString("N0") + " кликов", false);
         }
@@ -2437,15 +2446,34 @@ namespace BgClicker
             }
         }
 
+        private void ResetRate()
+        {
+            _rateValue = 0;
+            _rateLastCount = 0;
+            _rateLastTime = DateTime.UtcNow;
+        }
+
         private void OnUiTick(object sender, EventArgs e)
         {
             if (_engine.IsRunning)
             {
                 _wasRunning = true;
+                long count = _engine.Count;
+                DateTime now = DateTime.UtcNow;
+                double seconds = (now - _rateLastTime).TotalSeconds;
+                if (seconds >= 0.5)
+                {
+                    double current = (count - _rateLastCount) / seconds;
+                    _rateValue = _rateValue <= 0 ? current : (_rateValue * 0.65) + (current * 0.35);
+                    _rateLastCount = count;
+                    _rateLastTime = now;
+                }
+
                 SetStatus(
                     string.Format(
-                        "Работает · {0:N0} кликов{1}",
-                        _engine.Count,
+                        "Работает · {0:N0} кликов · ~{1:N0}/с{2}",
+                        count,
+                        _rateValue,
                         _skippedTargets > 0 ? " · пропущено целей: " + _skippedTargets : ""),
                     false);
             }

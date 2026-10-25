@@ -35,7 +35,8 @@ namespace BgClicker
             int clicksPerSecond,
             int jitterPercent,
             Action reload = null,
-            int reloadSeconds = 0)
+            int reloadSeconds = 0,
+            int clicksPerTick = 1)
         {
             Stop();
             if (_thread != null)
@@ -48,12 +49,13 @@ namespace BgClicker
             _lastError = null;
             _running = true;
 
-            double baseInterval = Math.Max(1.0, 1000.0 / Math.Max(1, clicksPerSecond));
+            double baseInterval = Math.Max(0.05, 1000.0 / Math.Max(1, clicksPerSecond));
             int jitter = Math.Max(0, Math.Min(50, jitterPercent));
+            int perTick = Math.Max(1, clicksPerTick);
 
             _thread = new Thread(new ThreadStart(delegate
             {
-                Run(click, baseInterval, jitter, reload, reloadSeconds);
+                Run(click, baseInterval, jitter, reload, reloadSeconds, perTick);
             }));
             _thread.IsBackground = true;
             _thread.Name = "BgClicker";
@@ -77,7 +79,13 @@ namespace BgClicker
             }
         }
 
-        private void Run(Func<bool> click, double baseInterval, int jitter, Action reload, int reloadSeconds)
+        private void Run(
+            Func<bool> click,
+            double baseInterval,
+            int jitter,
+            Action reload,
+            int reloadSeconds,
+            int clicksPerTick)
         {
             Native.timeBeginPeriod(1);
             var random = new Random();
@@ -109,7 +117,7 @@ namespace BgClicker
                         break;
                     }
 
-                    Interlocked.Increment(ref _count);
+                    Interlocked.Add(ref _count, clicksPerTick);
 
                     double factor = 1.0;
                     if (jitter > 0)
