@@ -250,23 +250,19 @@ new Promise(function (resolve) {
 
         public async Task ClickAsync(double x, double y)
         {
-            if (double.IsNaN(_lastX) ||
-                Math.Abs(x - _lastX) > 0.5 ||
-                Math.Abs(y - _lastY) > 0.5)
-            {
-                var moved = new Dictionary<string, object>
-                {
-                    { "type", "mouseMoved" },
-                    { "x", x },
-                    { "y", y },
-                    { "button", "none" },
-                    { "buttons", 0 }
-                };
-                await SendNoWaitAsync("Input.dispatchMouseEvent", moved).ConfigureAwait(false);
-                _lastX = x;
-                _lastY = y;
-            }
+            await ClickAsync(x, y, false).ConfigureAwait(false);
+        }
 
+        public async Task ClickAsync(double x, double y, bool reliable)
+        {
+            var moved = new Dictionary<string, object>
+            {
+                { "type", "mouseMoved" },
+                { "x", x },
+                { "y", y },
+                { "button", "none" },
+                { "buttons", 0 }
+            };
             var pressed = new Dictionary<string, object>
             {
                 { "type", "mousePressed" },
@@ -286,8 +282,42 @@ new Promise(function (resolve) {
                 { "clickCount", 1 }
             };
 
-            // Fire-and-forget: the browser processes input in order, while the
-            // separate health check catches a page that stopped responding.
+            if (reliable)
+            {
+                // Compatibility mode: a full mouse sequence per click and a
+                // response from the browser before the next click. Slower, but
+                // sites that rely on hover/pointer state credit the clicks.
+                await SendNoWaitAsync("Input.dispatchMouseEvent", moved).ConfigureAwait(false);
+                try
+                {
+                    await SendAsync("Input.dispatchMouseEvent", pressed, 2000).ConfigureAwait(false);
+                    await SendAsync("Input.dispatchMouseEvent", released, 2000).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    if (Logger != null)
+                    {
+                        Logger("timeout Input.dispatchMouseEvent; reloading page");
+                    }
+
+                    TryReload();
+                }
+
+                _lastX = x;
+                _lastY = y;
+                return;
+            }
+
+            if (double.IsNaN(_lastX) ||
+                Math.Abs(x - _lastX) > 0.5 ||
+                Math.Abs(y - _lastY) > 0.5)
+            {
+                await SendNoWaitAsync("Input.dispatchMouseEvent", moved).ConfigureAwait(false);
+                _lastX = x;
+                _lastY = y;
+            }
+
+            // Fast mode: fire-and-forget; the health check catches a stuck page.
             await SendNoWaitAsync("Input.dispatchMouseEvent", pressed).ConfigureAwait(false);
             await SendNoWaitAsync("Input.dispatchMouseEvent", released).ConfigureAwait(false);
 
@@ -299,6 +329,8 @@ new Promise(function (resolve) {
                 await CheckHealthAsync().ConfigureAwait(false);
             }
         }
+
+        public static Action<string> Logger;
 
         private async Task CheckHealthAsync()
         {
@@ -315,6 +347,11 @@ new Promise(function (resolve) {
             {
                 // The renderer is stuck: reload the page instead of stopping
                 // the clicker with a timeout error.
+                if (Logger != null)
+                {
+                    Logger("health check failed; reloading page");
+                }
+
                 TryReload();
             }
         }
@@ -325,6 +362,11 @@ new Promise(function (resolve) {
             _lastY = double.NaN;
             try
             {
+                if (Logger != null)
+                {
+                    Logger("reload requested");
+                }
+
                 var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
                 SendNoWaitAsync("Page.reload", parameters).GetAwaiter().GetResult();
             }
@@ -335,7 +377,12 @@ new Promise(function (resolve) {
 
         public void ClickSync(double x, double y)
         {
-            ClickAsync(x, y).GetAwaiter().GetResult();
+            ClickSync(x, y, false);
+        }
+
+        public void ClickSync(double x, double y, bool reliable)
+        {
+            ClickAsync(x, y, reliable).GetAwaiter().GetResult();
         }
 
         public void ReloadSync()

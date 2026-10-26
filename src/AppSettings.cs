@@ -28,6 +28,7 @@ namespace BgClicker
         public List<ClickTargetSettings> Targets { get; set; }
         public bool AutoReload { get; set; }
         public int ReloadSeconds { get; set; }
+        public string ClickMode { get; set; }
 
         public AppSettings()
         {
@@ -46,6 +47,7 @@ namespace BgClicker
             Targets = new List<ClickTargetSettings>();
             AutoReload = false;
             ReloadSeconds = 120;
+            ClickMode = "reliable";
         }
 
         private static string StorageDir

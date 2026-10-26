@@ -62,6 +62,8 @@ namespace BgClicker
 
         private CheckBox _chkAutoReload;
         private NumericUpDown _numReload;
+        private CheckBox _chkReliable;
+        private Label _lblLogPath;
         private ListBox _lstTargets;
         private Label _lblTargetsCount;
         private Button _btnTargetPick;
@@ -94,6 +96,8 @@ namespace BgClicker
         private DateTime _rateLastTime;
         private long _rateLastCount;
         private double _rateValue;
+        private bool _reliableClicks;
+        private DateTime _lastDiagLog;
         private readonly bool _restrictedEnvironment;
         private readonly string _environmentError;
 
@@ -101,6 +105,7 @@ namespace BgClicker
         {
             _cfg = AppSettings.Load();
             RemoveLegacyLog();
+            CdpConnection.Logger = delegate(string message) { Log("cdp: " + message); };
             _palette = ThemeManager.Palette(false);
             _restrictedEnvironment = BrowserLauncher.IsRestrictedEnvironment(out _environmentError);
             Log("startup: lowIntegrity=" + Native.IsLowIntegrity() +
@@ -708,9 +713,11 @@ namespace BgClicker
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 1,
-                RowCount = 2
+                RowCount = 4
             };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -859,6 +866,93 @@ namespace BgClicker
             });
             reloadGroup.Controls.Add(reloadFlow);
             page.Controls.Add(reloadGroup, 0, 1);
+
+            var clicksGroup = new ThemedGroupBox
+            {
+                Text = "Клики",
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(10, 4, 10, 10),
+                Margin = new Padding(0, 8, 0, 0)
+            };
+
+            var clicksFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                Margin = new Padding(0)
+            };
+
+            _chkReliable = new CheckBox
+            {
+                Text = "Совместимый режим (надёжнее для зачисления)",
+                AutoSize = true,
+                Margin = new Padding(0, 4, 0, 4)
+            };
+            _chkReliable.CheckedChanged += delegate
+            {
+                if (_loading)
+                {
+                    return;
+                }
+
+                _reliableClicks = _chkReliable.Checked;
+                SaveSettings();
+            };
+            clicksFlow.Controls.Add(_chkReliable);
+            clicksFlow.Controls.Add(new Label
+            {
+                Text = "Двигает мышь перед каждым кликом и ждёт ответа браузера. Медленнее, " +
+                       "но сайты, которые проверяют наведение/нажатие, засчитывают клики.",
+                AutoSize = true,
+                MaximumSize = new Size(690, 0),
+                Tag = "hint",
+                Margin = new Padding(0, 4, 0, 0)
+            });
+            clicksGroup.Controls.Add(clicksFlow);
+            page.Controls.Add(clicksGroup, 0, 2);
+
+            var diagGroup = new ThemedGroupBox
+            {
+                Text = "Диагностика",
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(10, 4, 10, 10),
+                Margin = new Padding(0, 8, 0, 0)
+            };
+
+            var diagFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                Margin = new Padding(0)
+            };
+
+            _lblLogPath = new Label
+            {
+                Text = "Лог: " + (GetLogPath() ?? "недоступен"),
+                AutoSize = true,
+                MaximumSize = new Size(690, 0),
+                Tag = "hint",
+                Margin = new Padding(0, 4, 0, 6)
+            };
+            var openLogs = new Button
+            {
+                Text = "Открыть папку логов",
+                AutoSize = true,
+                Margin = new Padding(0)
+            };
+            openLogs.Click += OnOpenLogsClick;
+            diagFlow.Controls.Add(_lblLogPath);
+            diagFlow.Controls.Add(openLogs);
+            diagGroup.Controls.Add(diagFlow);
+            page.Controls.Add(diagGroup, 0, 3);
 
             _pageSettings.Controls.Add(page);
         }
@@ -1105,6 +1199,8 @@ namespace BgClicker
                 _chkAutoReload.Checked = _cfg.AutoReload;
                 _numReload.Value = Clamp(_cfg.ReloadSeconds, 10, 3600);
                 _numReload.Enabled = _chkAutoReload.Checked;
+                _reliableClicks = _cfg.ClickMode != "fast";
+                _chkReliable.Checked = _reliableClicks;
 
                 _targets.Clear();
                 if (_cfg.Targets != null)
@@ -1158,6 +1254,7 @@ namespace BgClicker
             _cfg.UseDeepChild = _cmbPart.SelectedIndex != 1;
             _cfg.AutoReload = _chkAutoReload.Checked;
             _cfg.ReloadSeconds = (int)_numReload.Value;
+            _cfg.ClickMode = _chkReliable.Checked ? "reliable" : "fast";
             _cfg.Targets = new List<ClickTargetSettings>();
             foreach (ClickTarget target in _targets)
             {
@@ -1363,6 +1460,18 @@ namespace BgClicker
                 return;
             }
 
+            foreach (ClickTarget target in active)
+            {
+                if (target.Config.Browser)
+                {
+                    string under = await DescribePointAsync(
+                        target.Connection,
+                        target.Config.X,
+                        target.Config.Y);
+                    Log("target " + target + " reliable=" + _reliableClicks + " under=" + under);
+                }
+            }
+
             int cps = (int)_numCps.Value;
             int jitter = (int)_numJitter.Value;
             int reloadSeconds = _chkAutoReload.Checked ? (int)_numReload.Value : 0;
@@ -1397,7 +1506,7 @@ namespace BgClicker
                     {
                         if (target.Config.Browser)
                         {
-                            target.Connection.ClickSync(target.Config.X, target.Config.Y);
+                            target.Connection.ClickSync(target.Config.X, target.Config.Y, _reliableClicks);
                         }
                         else
                         {
@@ -1430,6 +1539,8 @@ namespace BgClicker
 
             _wasRunning = true;
             _skippedTargets = skipped;
+            Log("start targets=" + active.Count + " skipped=" + skipped +
+                " cps=" + cps + " reliable=" + _reliableClicks + " reload=" + reloadSeconds);
             UpdateRunUi();
             SetStatus(
                 "Работает · 0 кликов" + (skipped > 0 ? " · пропущено целей: " + skipped : ""),
@@ -1907,6 +2018,31 @@ namespace BgClicker
             SaveSettings();
         }
 
+        private void OnOpenLogsClick(object sender, EventArgs e)
+        {
+            string dir = GetLogDirectory();
+            if (string.IsNullOrEmpty(dir))
+            {
+                SetStatus("Папка логов недоступна", true);
+                return;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "\"" + dir + "\"",
+                    UseShellExecute = true
+                });
+                SetStatus("Логи: " + Path.Combine(dir, "launch.log"), false);
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Не удалось открыть папку логов: " + ex.Message, true);
+            }
+        }
+
         private async Task StartBrowserAsync()
         {
             _skippedTargets = 0;
@@ -1927,10 +2063,13 @@ namespace BgClicker
                 ? new Action(delegate { connection.ReloadSync(); })
                 : null;
 
+            string under = await DescribePointAsync(connection, x, y);
+            Log("start browser x=" + x + " y=" + y + " reliable=" + _reliableClicks + " under=" + under);
+
             bool started = _engine.Start(
                 delegate
                 {
-                    connection.ClickSync(x, y);
+                    connection.ClickSync(x, y, _reliableClicks);
                     return true;
                 },
                 cps,
@@ -1978,6 +2117,7 @@ namespace BgClicker
 
             _wasRunning = true;
             UpdateRunUi();
+            Log("start window cps=" + cps + " reliable=" + _reliableClicks);
             SetStatus("Работает · 0 кликов", false);
             SaveSettings();
         }
@@ -1987,6 +2127,7 @@ namespace BgClicker
             _engine.Stop();
             _wasRunning = false;
             _rateValue = 0;
+            Log("stop count=" + _engine.Count);
             UpdateRunUi();
             SetStatus("Остановлено · " + _engine.Count.ToString("N0") + " кликов", false);
         }
@@ -2407,12 +2548,35 @@ namespace BgClicker
 
             try
             {
-                await _cdp.ClickAsync((double)_numX.Value, (double)_numY.Value);
-                SetStatus("Тестовый клик отправлен", false);
+                double x = (double)_numX.Value;
+                double y = (double)_numY.Value;
+                await _cdp.ClickAsync(x, y, _reliableClicks);
+                string under = await DescribePointAsync(_cdp, x, y);
+                SetStatus("Клик отправлен · под точкой: " + under, false);
+                Log("test click x=" + x + " y=" + y + " reliable=" + _reliableClicks + " under=" + under);
             }
             catch (Exception ex)
             {
                 SetStatus("Ошибка клика: " + ex.Message, true);
+            }
+        }
+
+        private static async Task<string> DescribePointAsync(CdpConnection connection, double x, double y)
+        {
+            try
+            {
+                string expression =
+                    "(function(){var e=document.elementFromPoint(" +
+                    x.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+                    y.ToString(System.Globalization.CultureInfo.InvariantCulture) + ");" +
+                    "if(!e)return 'none';var t=(e.innerText||e.value||'').replace(/\\s+/g,' ').trim().slice(0,70);" +
+                    "return e.tagName+'#'+e.id+' class='+(e.className||'')+' text='+t;})()";
+                object value = await connection.EvaluateAsync(expression, false, 3000);
+                return Convert.ToString(value);
+            }
+            catch (Exception ex)
+            {
+                return "? " + ex.Message;
             }
         }
 
@@ -2504,6 +2668,7 @@ namespace BgClicker
             _rateValue = 0;
             _rateLastCount = 0;
             _rateLastTime = DateTime.UtcNow;
+            _lastDiagLog = DateTime.UtcNow;
         }
 
         private void OnUiTick(object sender, EventArgs e)
@@ -2520,6 +2685,16 @@ namespace BgClicker
                     _rateValue = _rateValue <= 0 ? current : (_rateValue * 0.65) + (current * 0.35);
                     _rateLastCount = count;
                     _rateLastTime = now;
+                }
+
+                if ((now - _lastDiagLog).TotalSeconds >= 10)
+                {
+                    _lastDiagLog = now;
+                    Log(string.Format(
+                        "run count={0} rate={1:F0}/s skipped={2}",
+                        count,
+                        _rateValue,
+                        _skippedTargets));
                 }
 
                 SetStatus(
@@ -2821,30 +2996,76 @@ namespace BgClicker
             return value;
         }
 
-        private static string GetLogPath()
+        private static string GetLogDirectory()
         {
+            try
+            {
+                string dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "BgClicker",
+                    "logs");
+                if (IsWritableDirectory(dir))
+                {
+                    return dir;
+                }
+            }
+            catch
+            {
+            }
+
             try
             {
                 string dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "BgClicker",
                     "logs");
-                Directory.CreateDirectory(dir);
-                return Path.Combine(dir, "launch.log");
+                if (IsWritableDirectory(dir))
+                {
+                    return dir;
+                }
             }
             catch
             {
-                try
+            }
+
+            try
+            {
+                string dir = Path.Combine(Path.GetTempPath(), "BgClicker", "logs");
+                if (IsWritableDirectory(dir))
                 {
-                    string dir = Path.Combine(Path.GetTempPath(), "BgClicker", "logs");
-                    Directory.CreateDirectory(dir);
-                    return Path.Combine(dir, "launch.log");
-                }
-                catch
-                {
-                    return null;
+                    return dir;
                 }
             }
+            catch
+            {
+            }
+
+            return null;
+        }
+
+        private static bool IsWritableDirectory(string dir)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string probe = Path.Combine(dir, ".write-test");
+                using (File.Create(probe))
+                {
+                }
+
+                File.Delete(probe);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string GetLogPath()
+        {
+            string dir = GetLogDirectory();
+            return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, "launch.log");
         }
 
         private static void RemoveLegacyLog()
@@ -2855,16 +3076,6 @@ namespace BgClicker
                 if (File.Exists(legacy))
                 {
                     File.Delete(legacy);
-                }
-
-                string oldLocal = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "BgClicker",
-                    "logs",
-                    "launch.log");
-                if (File.Exists(oldLocal))
-                {
-                    File.Delete(oldLocal);
                 }
             }
             catch
