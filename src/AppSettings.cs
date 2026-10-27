@@ -29,6 +29,7 @@ namespace BgClicker
         public bool AutoReload { get; set; }
         public int ReloadSeconds { get; set; }
         public string ClickMode { get; set; }
+        public string SiteLimit { get; set; }
 
         public AppSettings()
         {
@@ -48,6 +49,7 @@ namespace BgClicker
             AutoReload = false;
             ReloadSeconds = 120;
             ClickMode = "reliable";
+            SiteLimit = "on";
         }
 
         private static string StorageDir

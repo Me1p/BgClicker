@@ -63,6 +63,7 @@ namespace BgClicker
         private CheckBox _chkAutoReload;
         private NumericUpDown _numReload;
         private CheckBox _chkReliable;
+        private CheckBox _chkSiteLimit;
         private Label _lblLogPath;
         private ListBox _lstTargets;
         private Label _lblTargetsCount;
@@ -97,7 +98,12 @@ namespace BgClicker
         private long _rateLastCount;
         private double _rateValue;
         private bool _reliableClicks;
+        private bool _siteLimit;
+        private int _effectiveCps;
         private DateTime _lastDiagLog;
+        private DateTime _lowRateSince;
+        private DateTime _lastRecovery;
+        private bool _recoverWithReload;
         private readonly bool _restrictedEnvironment;
         private readonly string _environmentError;
 
@@ -903,6 +909,33 @@ namespace BgClicker
                 SaveSettings();
             };
             clicksFlow.Controls.Add(_chkReliable);
+
+            _chkSiteLimit = new CheckBox
+            {
+                Text = "Не превышать лимит сайта (~40 кликов/с)",
+                AutoSize = true,
+                Margin = new Padding(0, 4, 0, 4)
+            };
+            _chkSiteLimit.CheckedChanged += delegate
+            {
+                if (_loading)
+                {
+                    return;
+                }
+
+                _siteLimit = _chkSiteLimit.Checked;
+                SaveSettings();
+            };
+            clicksFlow.Controls.Add(_chkSiteLimit);
+            clicksFlow.Controls.Add(new Label
+            {
+                Text = "Сайт отправляет клики партиями до 400 раз в 8 секунд и засчитывает " +
+                       "примерно до 40 кликов/с. Выше этого монеты не успевают начисляться.",
+                AutoSize = true,
+                MaximumSize = new Size(690, 0),
+                Tag = "hint",
+                Margin = new Padding(0, 4, 0, 0)
+            });
             clicksFlow.Controls.Add(new Label
             {
                 Text = "Двигает мышь перед каждым кликом и ждёт ответа браузера. Медленнее, " +
@@ -1201,6 +1234,8 @@ namespace BgClicker
                 _numReload.Enabled = _chkAutoReload.Checked;
                 _reliableClicks = _cfg.ClickMode != "fast";
                 _chkReliable.Checked = _reliableClicks;
+                _siteLimit = _cfg.SiteLimit != "off";
+                _chkSiteLimit.Checked = _siteLimit;
 
                 _targets.Clear();
                 if (_cfg.Targets != null)
@@ -1255,6 +1290,7 @@ namespace BgClicker
             _cfg.AutoReload = _chkAutoReload.Checked;
             _cfg.ReloadSeconds = (int)_numReload.Value;
             _cfg.ClickMode = _chkReliable.Checked ? "reliable" : "fast";
+            _cfg.SiteLimit = _chkSiteLimit.Checked ? "on" : "off";
             _cfg.Targets = new List<ClickTargetSettings>();
             foreach (ClickTarget target in _targets)
             {
@@ -1472,7 +1508,10 @@ namespace BgClicker
                 }
             }
 
-            int cps = (int)_numCps.Value;
+            int requestedCps = (int)_numCps.Value;
+            bool hasBrowser = active.Exists(delegate(ClickTarget item) { return item.Config.Browser; });
+            int cps = _siteLimit && hasBrowser ? Math.Min(requestedCps, 40) : requestedCps;
+            _effectiveCps = cps;
             int jitter = (int)_numJitter.Value;
             int reloadSeconds = _chkAutoReload.Checked ? (int)_numReload.Value : 0;
             Action reload = null;
@@ -1540,7 +1579,12 @@ namespace BgClicker
             _wasRunning = true;
             _skippedTargets = skipped;
             Log("start targets=" + active.Count + " skipped=" + skipped +
-                " cps=" + cps + " reliable=" + _reliableClicks + " reload=" + reloadSeconds);
+                " requested=" + requestedCps + " cps=" + cps +
+                " reliable=" + _reliableClicks + " reload=" + reloadSeconds);
+            if (hasBrowser && cps < requestedCps)
+            {
+                Log("site limit applied: " + requestedCps + " -> " + cps + " cps");
+            }
             UpdateRunUi();
             SetStatus(
                 "Работает · 0 кликов" + (skipped > 0 ? " · пропущено целей: " + skipped : ""),
@@ -2056,7 +2100,9 @@ namespace BgClicker
             CdpConnection connection = _cdp;
             int x = (int)_numX.Value;
             int y = (int)_numY.Value;
-            int cps = (int)_numCps.Value;
+            int requestedCps = (int)_numCps.Value;
+            int cps = _siteLimit ? Math.Min(requestedCps, 40) : requestedCps;
+            _effectiveCps = cps;
             int jitter = (int)_numJitter.Value;
             int reloadSeconds = _chkAutoReload.Checked ? (int)_numReload.Value : 0;
             Action reload = reloadSeconds > 0
@@ -2064,7 +2110,13 @@ namespace BgClicker
                 : null;
 
             string under = await DescribePointAsync(connection, x, y);
-            Log("start browser x=" + x + " y=" + y + " reliable=" + _reliableClicks + " under=" + under);
+            Log("start browser x=" + x + " y=" + y +
+                " requested=" + requestedCps + " cps=" + cps +
+                " reliable=" + _reliableClicks + " under=" + under);
+            if (cps < requestedCps)
+            {
+                Log("site limit applied: " + requestedCps + " -> " + cps + " cps");
+            }
 
             bool started = _engine.Start(
                 delegate
@@ -2102,6 +2154,7 @@ namespace BgClicker
             }
 
             int cps = (int)_numCps.Value;
+            _effectiveCps = cps;
             int jitter = (int)_numJitter.Value;
 
             bool started = _engine.Start(
@@ -2669,6 +2722,47 @@ namespace BgClicker
             _rateLastCount = 0;
             _rateLastTime = DateTime.UtcNow;
             _lastDiagLog = DateTime.UtcNow;
+            _lowRateSince = default(DateTime);
+            _lastRecovery = DateTime.UtcNow;
+            _recoverWithReload = false;
+            _effectiveCps = 0;
+        }
+
+        private void RecoverBrowserTargets(bool reload)
+        {
+            var seen = new HashSet<CdpConnection>();
+            Action<CdpConnection> apply = delegate(CdpConnection connection)
+            {
+                if (connection == null || !connection.IsConnected || !seen.Add(connection))
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (reload)
+                    {
+                        connection.ReloadSync();
+                    }
+                    else
+                    {
+                        connection.KeepActive();
+                    }
+                }
+                catch
+                {
+                }
+            };
+
+            foreach (ClickTarget target in _targets)
+            {
+                if (target.Config.Browser)
+                {
+                    apply(target.Connection);
+                }
+            }
+
+            apply(_cdp);
         }
 
         private void OnUiTick(object sender, EventArgs e)
@@ -2697,12 +2791,42 @@ namespace BgClicker
                         _skippedTargets));
                 }
 
+                double targetRate = _effectiveCps > 0 ? _effectiveCps : (double)_numCps.Value;
+                if (targetRate >= 20 && _rateValue > 0 && _rateValue < targetRate * 0.2)
+                {
+                    if (_lowRateSince == default(DateTime))
+                    {
+                        _lowRateSince = now;
+                    }
+
+                    if ((now - _lowRateSince).TotalSeconds >= 15 &&
+                        (now - _lastRecovery).TotalSeconds >= 20)
+                    {
+                        Log(string.Format(
+                            "low rate {0:F0}/s < {1:F0}/s; recovery reload={2}",
+                            _rateValue,
+                            targetRate,
+                            _recoverWithReload));
+                        RecoverBrowserTargets(_recoverWithReload);
+                        _recoverWithReload = !_recoverWithReload;
+                        _lowRateSince = now;
+                        _lastRecovery = now;
+                    }
+                }
+                else
+                {
+                    _lowRateSince = default(DateTime);
+                }
+
                 SetStatus(
                     string.Format(
-                        "Работает · {0:N0} кликов · ~{1:N0}/с{2}",
+                        "Работает · {0:N0} кликов · ~{1:N0}/с{2}{3}",
                         count,
                         _rateValue,
-                        _skippedTargets > 0 ? " · пропущено целей: " + _skippedTargets : ""),
+                        _skippedTargets > 0 ? " · пропущено целей: " + _skippedTargets : "",
+                        _effectiveCps > 0 && _effectiveCps < (int)_numCps.Value
+                            ? " · лимит сайта " + _effectiveCps + "/с"
+                            : ""),
                     false);
             }
             else if (_wasRunning)
@@ -3093,6 +3217,13 @@ namespace BgClicker
 
             try
             {
+                var info = new FileInfo(path);
+                if (info.Exists && info.Length > 4 * 1024 * 1024)
+                {
+                    File.Copy(path, path + ".old", true);
+                    File.WriteAllText(path, string.Empty);
+                }
+
                 File.AppendAllText(
                     path,
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + message + Environment.NewLine);

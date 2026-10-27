@@ -197,6 +197,44 @@ new Promise(function (resolve) {
 
             await _socket.ConnectAsync(new Uri(target.WsUrl), _cancellation.Token).ConfigureAwait(false);
             _receiveTask = Task.Run(() => ReceiveLoopAsync(_cancellation.Token));
+
+            try
+            {
+                await SendNoWaitAsync("Page.enable", new Dictionary<string, object>()).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            KeepActive();
+        }
+
+        /// <summary>
+        /// Keeps a background tab from being frozen/throttled by Chrome.
+        /// </summary>
+        public void KeepActive()
+        {
+            try
+            {
+                SendNoWaitAsync("Emulation.setFocusEmulationEnabled", new Dictionary<string, object>
+                {
+                    { "enabled", true }
+                }).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                SendNoWaitAsync("Page.setWebLifecycleState", new Dictionary<string, object>
+                {
+                    { "state", "active" }
+                }).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
         }
 
         public async Task<Dictionary<string, object>> SendAsync(
@@ -369,6 +407,7 @@ new Promise(function (resolve) {
 
                 var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
                 SendNoWaitAsync("Page.reload", parameters).GetAwaiter().GetResult();
+                KeepActive();
             }
             catch
             {
@@ -393,6 +432,7 @@ new Promise(function (resolve) {
             {
                 var parameters = new Dictionary<string, object> { { "ignoreCache", false } };
                 SendNoWaitAsync("Page.reload", parameters).GetAwaiter().GetResult();
+                KeepActive();
             }
             catch
             {

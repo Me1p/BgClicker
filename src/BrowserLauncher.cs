@@ -55,7 +55,7 @@ namespace BgClicker
                 "--disable-background-timer-throttling",
                 "--disable-backgrounding-occluded-windows",
                 "--disable-renderer-backgrounding",
-                "--disable-features=CalculateNativeWinOcclusion",
+                "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,HighEfficiencyMode",
                 "--no-first-run",
                 "--no-default-browser-check"
             };

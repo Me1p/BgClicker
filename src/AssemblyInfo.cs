@@ -5,5 +5,5 @@ using System.Reflection;
 [assembly: AssemblyProduct("BgClicker")]
 [assembly: AssemblyCompany("Me1p")]
 [assembly: AssemblyCopyright("Copyright © 2026 Me1p")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.5.0.0")]
+[assembly: AssemblyFileVersion("1.5.0.0")]
